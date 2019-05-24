@@ -1,5 +1,5 @@
-/* uLisp MSP430 Version 2.6 - www.ulisp.com
-   David Johnson-Davies - www.technoblogy.com - 18th April 2019
+/* uLisp MSP430 Version 2.7 - www.ulisp.com
+   David Johnson-Davies - www.technoblogy.com - 24th May 2019
 
    Licensed under the MIT license: https://opensource.org/licenses/MIT
 */
@@ -365,8 +365,7 @@ int compactimage (object **arg) {
 char *MakeFilename (object *arg) {
   char *buffer = SymbolTop;
   int max = maxbuffer(buffer);
-  buffer[0]='/';
-  int i = 1;
+  int i = 0;
   do {
     char c = nthchar(arg, i);
     if (c == '\0') break;
@@ -540,26 +539,23 @@ void autorunimage () {
   File file = SD.open("ULISP.IMG");
   if (!file) error(PSTR("Problem autorunning from SD card"));
   object *autorun = (object *)SDReadInt(file);
-  object *nullenv = NULL;
   file.close();
   if (autorun != NULL) {
     loadimage(NULL);
-    apply(autorun, NULL, &nullenv);
+    apply(autorun, NULL, NULL);
   }
 #elif defined(__MSP430F5529__)
   object *autorun;
-  object *nullenv = NULL;
   Flash.read(FLASH+2, (unsigned char*)&autorun, 2);
   if (autorun != NULL && (unsigned int)autorun != 0xFFFF) {
     loadimage(nil);
-    apply(autorun, NULL, &nullenv);
+    apply(autorun, NULL, NULL);
   }
 #elif defined(__MSP430FR5969__) || defined(__MSP430FR5994__) || defined(__MSP430FR6989__)
   object *autorun = image.eval;
-  object *nullenv = NULL;
   if (autorun != NULL && (unsigned int)autorun != 0xFFFF) {
     loadimage(nil);
-    apply(autorun, NULL, &nullenv);
+    apply(autorun, NULL, NULL);
   }
 #endif
 }
@@ -843,15 +839,6 @@ object *findvalue (object *var, object *env) {
   return pair;
 }
 
-object *findtwin (object *var, object *env) {
-  while (env != NULL) {
-    object *pair = car(env);
-    if (pair != NULL && car(pair) == var) return pair;
-    env = cdr(env);
-  }
-  return NULL;
-}
-
 // Handling closures
   
 object *closure (int tc, object *fname, object *state, object *function, object *args, object **env) {
@@ -864,10 +851,14 @@ object *closure (int tc, object *fname, object *state, object *function, object 
   }
   object *params = first(function);
   function = cdr(function);
-  // Push state if not already in env
+  // Dropframe
+  if (tc) {
+    while (*env != NULL && car(*env) != NULL) pop(*env);
+  } else push(nil, *env);
+  // Push state
   while (state != NULL) {
     object *pair = first(state);
-    if (findtwin(car(pair), *env) == NULL) push(pair, *env);
+    push(pair, *env);
     state = cdr(state);
   }
   // Add arguments to environment
@@ -896,9 +887,7 @@ object *closure (int tc, object *fname, object *state, object *function, object 
           else error2(fname, PSTR("has too few arguments"));
         } else { value = first(args); args = cdr(args); }
       }
-      object *pair = findtwin(var, *env);
-      if (tc && (pair != NULL)) cdr(pair) = value;
-      else push(cons(var,value), *env);
+      push(cons(var,value), *env);
       if (trace) { pserial(' '); printobject(value, pserial); }
     }
     params = cdr(params);  
@@ -909,24 +898,24 @@ object *closure (int tc, object *fname, object *state, object *function, object 
   return tf_progn(function, *env);
 }
 
-object *apply (object *function, object *args, object **env) {
+object *apply (object *function, object *args, object *env) {
   if (symbolp(function)) {
     symbol_t name = function->name;
     int nargs = listlength(args);
     if (name >= ENDFUNCTIONS) error2(function, PSTR("is not valid here"));
     if (nargs<lookupmin(name)) error2(function, PSTR("has too few arguments"));
     if (nargs>lookupmax(name)) error2(function, PSTR("has too many arguments"));
-    return ((fn_ptr_type)lookupfn(name))(args, *env);
+    return ((fn_ptr_type)lookupfn(name))(args, env);
   }
   if (listp(function) && issymbol(car(function), LAMBDA)) {
     function = cdr(function);
-    object *result = closure(0, NULL, NULL, function, args, env);
-    return eval(result, *env);
+    object *result = closure(0, NULL, NULL, function, args, &env);
+    return eval(result, env);
   }
   if (listp(function) && issymbol(car(function), CLOSURE)) {
     function = cdr(function);
-    object *result = closure(0, NULL, car(function), cdr(function), args, env);
-    return eval(result, *env);
+    object *result = closure(0, NULL, car(function), cdr(function), args, &env);
+    return eval(result, env);
   }
   error2(function, PSTR("is an illegal function"));
   return NULL;
@@ -1735,11 +1724,11 @@ object *fn_apply (object *args, object *env) {
   }
   if (!listp(car(last))) error3(APPLY, PSTR("last argument is not a list"));
   cdr(previous) = car(last);
-  return apply(first(args), cdr(args), &env);
+  return apply(first(args), cdr(args), env);
 }
 
 object *fn_funcall (object *args, object *env) {
-  return apply(first(args), cdr(args), &env);
+  return apply(first(args), cdr(args), env);
 }
 
 object *fn_append (object *args, object *env) {
@@ -1772,13 +1761,13 @@ object *fn_mapc (object *args, object *env) {
     while (list1 != NULL && list2 != NULL) {
       if (improperp(list1)) error3(name, PSTR("second argument is not a proper list"));
       if (improperp(list2)) error3(name, PSTR("third argument is not a proper list"));
-      apply(function, cons(car(list1),cons(car(list2),NULL)), &env);
+      apply(function, cons(car(list1),cons(car(list2),NULL)), env);
       list1 = cdr(list1); list2 = cdr(list2);
     }
   } else {
     while (list1 != NULL) {
       if (improperp(list1)) error3(name, PSTR("second argument is not a proper list"));
-      apply(function, cons(car(list1),NULL), &env);
+      apply(function, cons(car(list1),NULL), env);
       list1 = cdr(list1);
     }
   }
@@ -1798,7 +1787,7 @@ object *fn_mapcar (object *args, object *env) {
     while (list1 != NULL && list2 != NULL) {
       if (improperp(list1)) error3(name, PSTR("second argument is not a proper list"));
       if (improperp(list2)) error3(name, PSTR("third argument is not a proper list"));
-      object *result = apply(function, cons(car(list1), cons(car(list2),NULL)), &env);
+      object *result = apply(function, cons(car(list1), cons(car(list2),NULL)), env);
       object *obj = cons(result,NULL);
       cdr(tail) = obj;
       tail = obj;
@@ -1807,7 +1796,7 @@ object *fn_mapcar (object *args, object *env) {
   } else if (list1 != NULL) {
     while (list1 != NULL) {
       if (improperp(list1)) error3(name, PSTR("second argument is not a proper list"));
-      object *result = apply(function, cons(car(list1),NULL), &env);
+      object *result = apply(function, cons(car(list1),NULL), env);
       object *obj = cons(result,NULL);
       cdr(tail) = obj;
       tail = obj;
@@ -1831,7 +1820,7 @@ object *fn_mapcan (object *args, object *env) {
     while (list1 != NULL && list2 != NULL) {
       if (improperp(list1)) error3(name, PSTR("second argument is not a proper list"));
       if (improperp(list2)) error3(name, PSTR("third argument is not a proper list"));
-      object *result = apply(function, cons(car(list1), cons(car(list2),NULL)), &env);
+      object *result = apply(function, cons(car(list1), cons(car(list2),NULL)), env);
       while (result != NULL && (unsigned int)result >= PAIR) {
         cdr(tail) = result;
         tail = result;
@@ -1843,7 +1832,7 @@ object *fn_mapcan (object *args, object *env) {
   } else if (list1 != NULL) {
     while (list1 != NULL) {
       if (improperp(list1)) error3(name, PSTR("second argument is not a proper list"));
-      object *result = apply(function, cons(car(list1),NULL), &env);
+      object *result = apply(function, cons(car(list1),NULL), env);
       while (result != NULL && (unsigned int)result >= PAIR) {
         cdr(tail) = result;
         tail = result;
@@ -2197,7 +2186,7 @@ object *fn_sort (object *args, object *env) {
     while (go != ptr) {
       car(compare) = car(cdr(ptr));
       car(cdr(compare)) = car(cdr(go));
-      if (apply(predicate, compare, &env)) break;
+      if (apply(predicate, compare, env)) break;
       go = cdr(go);
     }
     if (go != ptr) {
@@ -3276,11 +3265,7 @@ object *eval (object *form, object *env) {
       object *envcopy = NULL;
       while (env != NULL) {
         object *pair = first(env);
-        if (pair != NULL) {
-          object *val = cdr(pair);
-          if (integerp(val)) val = number(val->integer);
-          push(cons(car(pair), val), envcopy);
-        }
+        if (pair != NULL) push(pair, envcopy);
         env = cdr(env);
       }
       return cons(symbol(CLOSURE), cons(envcopy,args));
@@ -3632,7 +3617,7 @@ void setup () {
   initworkspace();
   initenv();
   initsleep();
-  pfstring(PSTR("uLisp 2.6 "), pserial); pln(pserial);
+  pfstring(PSTR("uLisp 2.7 "), pserial); pln(pserial);
 }
 
 // Read/Evaluate/Print loop
