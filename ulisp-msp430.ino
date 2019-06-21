@@ -1,5 +1,5 @@
-/* uLisp MSP430 Version 2.7 - www.ulisp.com
-   David Johnson-Davies - www.technoblogy.com - 24th May 2019
+/* uLisp MSP430 Version 2.7c - www.ulisp.com
+   David Johnson-Davies - www.technoblogy.com - 20th June 2019
 
    Licensed under the MIT license: https://opensource.org/licenses/MIT
 */
@@ -853,8 +853,11 @@ object *closure (int tc, object *fname, object *state, object *function, object 
   function = cdr(function);
   // Dropframe
   if (tc) {
-    while (*env != NULL && car(*env) != NULL) pop(*env);
-  } else push(nil, *env);
+    if (*env != NULL && car(*env) == NULL) {
+      pop(*env);
+      while (*env != NULL && car(*env) != NULL) pop(*env);
+    } else push(nil, *env);
+  }
   // Push state
   while (state != NULL) {
     object *pair = first(state);
@@ -895,6 +898,7 @@ object *closure (int tc, object *fname, object *state, object *function, object 
   if (args != NULL) error2(fname, PSTR("has too many arguments"));
   if (trace) { pserial(')'); pln(pserial); }
   // Do an implicit progn
+  if (tc) push(nil, *env);
   return tf_progn(function, *env);
 }
 
@@ -967,36 +971,38 @@ inline object *cdrx (object *arg) {
 
 // I2C interface
 
-uint8_t const TWI_SDA_PIN = 10;
-uint8_t const TWI_SCL_PIN = 9;
-
-void I2Cinit(bool enablePullup) {
+void I2Cinit (bool enablePullup) {
   (void) enablePullup;
   Wire.begin();
 }
 
-inline uint8_t I2Cread() {
+inline uint8_t I2Cread () {
   return Wire.read();
 }
 
-inline bool I2Cwrite(uint8_t data) {
+inline bool I2Cwrite (uint8_t data) {
   return Wire.write(data);
 }
 
-bool I2Cstart(uint8_t address, uint8_t read) {
-  if (read == 0) Wire.beginTransmission(address);
-  else Wire.requestFrom(address, I2CCount);
-  return true;
+bool I2Cstart (uint8_t address, uint8_t read) {
+ int ok = true;
+ if (read == 0) {
+   Wire.beginTransmission(address);
+   ok = (Wire.endTransmission(true) == 0);
+   Wire.beginTransmission(address);
+ }
+ else Wire.requestFrom(address, I2CCount);
+ return ok;
 }
 
-bool I2Crestart(uint8_t address, uint8_t read) {
-  int error = (Wire.endTransmission(true) != 0);
+bool I2Crestart (uint8_t address, uint8_t read) {
+  int error = (Wire.endTransmission(false) != 0);
   if (read == 0) Wire.beginTransmission(address);
   else Wire.requestFrom(address, I2CCount);
   return error ? false : true;
 }
 
-void I2Cstop(uint8_t read) {
+void I2Cstop (uint8_t read) {
   if (read == 0) Wire.endTransmission(); // Check for error?
 }
 
